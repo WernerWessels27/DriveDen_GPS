@@ -111,4 +111,7 @@ app.get("/gi/courses/:publicId/gps", async (req, res) => {
 });
 
 app.get("/", (_, res) => res.sendFile(path.join(__dirname, "web", "index.html")));
-app.listen(PORT, () => console.log(`DriveDen GPS running at http://localhost:${PORT}`));
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`DriveDen GPS running on port ${PORT}`);
+});
+

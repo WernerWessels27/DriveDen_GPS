@@ -95,39 +95,49 @@
     document.getElementById('dBack').textContent  = Math.round(meters(p, b));
   }
 
-  function startGPS(){
-    const status = document.getElementById('status');
-    if (!('geolocation' in navigator)) { status.textContent = 'Geolocation not supported'; return; }
-    navigator.geolocation.watchPosition(pos => {
-      const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      you.setLatLng([p.lat, p.lng]);
-      updateDistances(p);
-      const acc = Math.round(pos.coords.accuracy || 0);
-      status.textContent = `Accuracy: ${acc} m`;
-      if (!movedOnce) { map.setView([p.lat, p.lng], 17); movedOnce = true; }
-    }, err => {
-      status.textContent = err.message;
-    }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 });
-  }
+  let lastPos = null; // add near the top, next to other globals
 
-  async function searchCourses(){
-    const q = document.getElementById('q').value.trim() || 'Pretoria';
-    const r = await fetch(`/gi/courses?q=${encodeURIComponent(q)}`);
-    const data = await r.json();
-    const list = Array.isArray(data) ? data : (data.data || []);
-    const sel = document.getElementById('courses');
-    sel.innerHTML = '';
-    list.forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.publicId || c.id; // GI shows publicId
-      const city = c.facility?.address?.city || '';
-      const region = c.facility?.address?.region || '';
-      const country = c.facility?.address?.countryCode || '';
-      opt.textContent = `${c.name || 'Course'} — ${[city, region, country].filter(Boolean).join(', ')}`;
-      sel.appendChild(opt);
-    });
-    if (list.length) await loadHoles(list[0].publicId || list[0].id);
+function startGPS(){
+  const status = document.getElementById('status');
+  if (!('geolocation' in navigator)) { status.textContent = 'Geolocation not supported'; return; }
+  navigator.geolocation.watchPosition(pos => {
+    const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    lastPos = p; // << store it
+    you.setLatLng([p.lat, p.lng]);
+    updateDistances(p);
+    const acc = Math.round(pos.coords.accuracy || 0);
+    status.textContent = `Accuracy: ${acc} m`;
+    if (!movedOnce) { map.setView([p.lat, p.lng], 17); movedOnce = true; }
+  }, err => { status.textContent = err.message; }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 });
+}
+
+async function searchCourses(){
+  const q = document.getElementById('q').value.trim() || 'Pretoria';
+  const params = new URLSearchParams({ q });
+  if (lastPos) { params.set('lat', lastPos.lat); params.set('lng', lastPos.lng); }
+  const r = await fetch(`/gi/courses?` + params.toString());
+  const data = await r.json();
+  const list = Array.isArray(data) ? data : (data.data || []);
+  const sel = document.getElementById('courses');
+  sel.innerHTML = '';
+  if (!list.length) {
+    document.getElementById('status').textContent = 'No courses found for this area/keyword.';
+    return;
   }
+  list.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.publicId || c.id || c.courseGroupId;
+    const city = c?.facility?.address?.city || '';
+    const region = c?.facility?.address?.region || '';
+    const country = c?.facility?.address?.countryCode || '';
+    opt.textContent = `${c.name || 'Course'} — ${[city, region, country].filter(Boolean).join(', ')}`;
+    sel.appendChild(opt);
+  });
+  document.getElementById('status').textContent = `Found ${list.length} course(s).`;
+  const firstId = list[0].publicId || list[0].id || list[0].courseGroupId;
+  if (firstId) await loadHoles(firstId);
+}
+
 
   function adaptGItoHoles(gi){
     const baseHoles = gi.layouts?.[0]?.holes?.length ? gi.layouts[0].holes : (gi.holes || []);

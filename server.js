@@ -30,16 +30,24 @@ async function getAccessToken() {
   const now = Date.now();
   if (accessToken && now < tokenExpiry - 10_000) return accessToken;
 
+  // GI expects application/json-patch+json and body: { code, clientId }
   const r = await fetch(`${GI_BASE}/auth/authenticateToken`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "accept": "application/json",
+      "Content-Type": "application/json-patch+json"
+    },
     body: JSON.stringify({
-      grant_type: "client_credentials",
       code: GI_API_TOKEN,
-      client_id: GI_CLIENT_ID
+      clientId: GI_CLIENT_ID
     })
   });
-  if (!r.ok) throw new Error(`GI auth failed ${r.status}: ${await r.text()}`);
+
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`GI auth failed ${r.status}: ${text}`);
+  }
+
   const data = await r.json();
   accessToken = data?.accessToken || data?.access_token;
   const exp = data?.expiresIn || data?.expires_in || 3300;
@@ -47,6 +55,7 @@ async function getAccessToken() {
   if (!accessToken) throw new Error("No accessToken in GI auth response");
   return accessToken;
 }
+
 
 function setCache(key, data, ttl) { cache.set(key, { data, expiry: Date.now() + ttl }); }
 function getCache(key) {

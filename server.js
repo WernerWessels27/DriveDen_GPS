@@ -114,21 +114,66 @@ if (!r.ok) {
 });
 
 // course GPS by publicId
-app.get("/gi/courses/:publicId/gps", async (req, res) => {
+// search courses (course groups) with GPS + ZA fallback
+app.get("/gi/courses", async (req, res) => {
   try {
-    const { publicId } = req.params;
-    const key = `gps:${publicId}`;
+    const q   = String(req.query.q || "").trim();
+    const lat = req.query.lat ? Number(req.query.lat) : null;
+    const lng = req.query.lng ? Number(req.query.lng) : null;
+
+    // cache key includes q+lat+lng
+    const key = `search:${q}:${lat ?? "x"}:${lng ?? "x"}`;
     const cached = getCache(key);
     if (cached) return res.json(cached);
 
     const token = await getAccessToken();
-    const r = await fetch(`${GI_BASE}/courses/getCourseGroupGPS?publicId=${encodeURIComponent(publicId)}`, {
-      method: "GET",
-      headers: {
-        "accept": "application/json",
-        "Authorization": `Bearer ${token}`
+
+    async function doSearch(body) {
+      const r = await fetch(`${GI_BASE}/courses/searchCourseGroups`, {
+        method: "POST",
+        headers: {
+          "accept": "application/json",
+          "Content-Type": "application/json-patch+json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify(body)
+      });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        console.error("[SEARCH] status", r.status, json);
+        return [];
       }
-    });
+      return Array.isArray(json?.data) ? json.data : (Array.isArray(json) ? json : []);
+    }
+
+    // Build base body
+    const body = {
+      rows: 50,
+      offset: 0,
+      keywords: q,
+      countryCode: "",          // wide open first attempt
+      regionCode: "",
+      gpsCoordinate: lat && lng ? { latitude: lat, longitude: lng }
+                                : { latitude: -25.746, longitude: 28.188 } // Pretoria CBD fallback
+    };
+
+    // 1) try keyword + gps point
+    let list = await doSearch(body);
+
+    // 2) fallback: force ZA + same gps point if empty
+    if (!list.length) {
+      console.log("[SEARCH] empty → retry with country ZA");
+      list = await doSearch({ ...body, countryCode: "ZA" });
+    }
+
+    setCache(key, list, SEARCH_TTL_MS);
+    res.json(list);
+  } catch (e) {
+    console.error("[SEARCH] error", e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 
     const json = await r.json().catch(() => ({}));
     if (!r.ok) {

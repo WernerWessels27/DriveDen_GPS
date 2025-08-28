@@ -94,11 +94,15 @@ app.get("/gi/courses", async (req, res) => {
       body: JSON.stringify(body)
     });
 
-    const json = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      console.error("[SEARCH] status", r.status, json);
-      return res.status(r.status).json(json);
-    }
+    const text = await r.text();               // grab raw text for visibility
+let json;
+try { json = JSON.parse(text); } catch { json = null; }
+
+if (!r.ok) {
+  console.error("[SEARCH] status", r.status, text);
+  return res.status(r.status).send(text || `Search failed (${r.status})`);
+}
+
 
     const payload = Array.isArray(json?.data) ? json.data : (Array.isArray(json) ? json : []);
     setCache(key, payload, SEARCH_TTL_MS);

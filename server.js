@@ -1,36 +1,39 @@
-
+// server.js — DriveDen GPS (Leaflet) + GI proxy
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname  = path.dirname(__filename);
 
-const GI_BASE = process.env.GI_BASE || "https://api.golfintelligence.com";
+const GI_BASE      = process.env.GI_BASE || "https://api.golfintelligence.com";
 const GI_CLIENT_ID = process.env.GI_CLIENT_ID || "";
 const GI_API_TOKEN = process.env.GI_API_TOKEN || "";
-const PORT = process.env.PORT || 8080;
-
-if (!GI_CLIENT_ID || !GI_API_TOKEN) {
-  console.warn("[WARN] GI_CLIENT_ID or GI_API_TOKEN not set. The proxy will fail to authenticate.");
-}
+const PORT         = process.env.PORT || 8080;
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "web")));
 
-// In-memory caches
+// --- simple caches to save credits ---
 let accessToken = null;
 let tokenExpiry = 0;
 const cache = new Map();
-const GPS_TTL_MS = 10 * 60 * 1000;
 const SEARCH_TTL_MS = 2 * 60 * 1000;
+const GPS_TTL_MS    = 10 * 60 * 1000;
 
+function setCache(k, v, ttl) { cache.set(k, { v, t: Date.now() + ttl }); }
+function getCache(k) {
+  const e = cache.get(k); if (!e) return null;
+  if (Date.now() > e.t) { cache.delete(k); return null; }
+  return e.v;
+}
+
+// === GI auth: application/x-www-form-urlencoded ===
 async function getAccessToken() {
   const now = Date.now();
   if (accessToken && now < tokenExpiry - 10_000) return accessToken;
 
-  // GI auth requires application/x-www-form-urlencoded
   const params = new URLSearchParams();
   params.append("grant_type", "client_credentials");
   params.append("code", GI_API_TOKEN);
@@ -52,82 +55,95 @@ async function getAccessToken() {
 
   const data = await r.json();
   accessToken = data?.accessToken || data?.access_token;
-  const exp = data?.expiresIn || data?.expires_in || 3300;
+  const exp   = data?.expiresIn || data?.expires_in || 3300;
   tokenExpiry = now + exp * 1000;
   if (!accessToken) throw new Error("No accessToken in GI auth response");
   return accessToken;
 }
 
+// === endpoints ===
 
+// healthcheck (Railway)
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
-function setCache(key, data, ttl) { cache.set(key, { data, expiry: Date.now() + ttl }); }
-function getCache(key) {
-  const v = cache.get(key);
-  if (!v) return null;
-  if (Date.now() > v.expiry) { cache.delete(key); return null; }
-  return v.data;
-}
-
-// Search
+// search courses (course groups)
 app.get("/gi/courses", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
-    const cached = getCache("s:" + q);
+    const key = `search:${q}`;
+    const cached = getCache(key);
     if (cached) return res.json(cached);
 
     const token = await getAccessToken();
+    const body = {
+      rows: 10,
+      offset: 0,
+      keywords: q,
+      countryCode: "",
+      regionCode: "",
+      gpsCoordinate: { latitude: 0, longitude: 0 }
+    };
+
     const r = await fetch(`${GI_BASE}/courses/searchCourseGroups`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`,
-        "accept": "application/json"
+        "accept": "application/json",
+        "Content-Type": "application/json-patch+json",
+        "Authorization": `Bearer ${token}`
       },
-      body: JSON.stringify({
-        rows: 10,
-        offset: 0,
-        keywords: q,
-        countryCode: "",
-        regionCode: "",
-        gpsCoordinate: { latitude: 0, longitude: 0 }
-      })
+      body: JSON.stringify(body)
     });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json(data);
-    const payload = data?.data || data;
-    setCache("s:" + q, payload, SEARCH_TTL_MS);
+
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      console.error("[SEARCH] status", r.status, json);
+      return res.status(r.status).json(json);
+    }
+
+    const payload = Array.isArray(json?.data) ? json.data : (Array.isArray(json) ? json : []);
+    setCache(key, payload, SEARCH_TTL_MS);
     res.json(payload);
   } catch (e) {
+    console.error("[SEARCH] error", e);
     res.status(500).json({ error: String(e) });
   }
 });
 
-// GPS by publicId
+// course GPS by publicId
 app.get("/gi/courses/:publicId/gps", async (req, res) => {
   try {
-    const id = req.params.publicId;
-    const cached = getCache("g:" + id);
+    const { publicId } = req.params;
+    const key = `gps:${publicId}`;
+    const cached = getCache(key);
     if (cached) return res.json(cached);
 
     const token = await getAccessToken();
-    const r = await fetch(`${GI_BASE}/courses/getCourseGroupGPS?publicId=${encodeURIComponent(id)}`, {
-      headers: { "Authorization": `Bearer ${token}`, "accept": "application/json" }
+    const r = await fetch(`${GI_BASE}/courses/getCourseGroupGPS?publicId=${encodeURIComponent(publicId)}`, {
+      method: "GET",
+      headers: {
+        "accept": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
     });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json(data);
-    setCache("g:" + id, data, GPS_TTL_MS);
-    res.json(data);
+
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      console.error("[GPS] status", r.status, json);
+      return res.status(r.status).json(json);
+    }
+
+    setCache(key, json, GPS_TTL_MS);
+    res.json(json);
   } catch (e) {
+    console.error("[GPS] error", e);
     res.status(500).json({ error: String(e) });
   }
 });
 
-app.get("/", (_, res) => res.sendFile(path.join(__dirname, "web", "index.html")));
-app.get("/healthz", (req, res) => res.status(200).send("ok"));
+// front-end
+app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "web", "index.html")));
 
+// listen on 0.0.0.0 for Railway
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`DriveDen GPS running on port ${PORT}`);
 });
-
-
-

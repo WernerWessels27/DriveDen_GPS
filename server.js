@@ -30,17 +30,19 @@ async function getAccessToken() {
   const now = Date.now();
   if (accessToken && now < tokenExpiry - 10_000) return accessToken;
 
-  // GI expects application/json-patch+json and body: { code, clientId }
+  // GI auth requires application/x-www-form-urlencoded
+  const params = new URLSearchParams();
+  params.append("grant_type", "client_credentials");
+  params.append("code", GI_API_TOKEN);
+  params.append("client_id", GI_CLIENT_ID);
+
   const r = await fetch(`${GI_BASE}/auth/authenticateToken`, {
     method: "POST",
     headers: {
       "accept": "application/json",
-      "Content-Type": "application/json-patch+json"
+      "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: JSON.stringify({
-      code: GI_API_TOKEN,
-      clientId: GI_CLIENT_ID
-    })
+    body: params.toString()
   });
 
   if (!r.ok) {
@@ -55,6 +57,7 @@ async function getAccessToken() {
   if (!accessToken) throw new Error("No accessToken in GI auth response");
   return accessToken;
 }
+
 
 
 function setCache(key, data, ttl) { cache.set(key, { data, expiry: Date.now() + ttl }); }

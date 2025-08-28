@@ -141,6 +141,17 @@ app.get("/gi/courses/:publicId/gps", async (req, res) => {
 });
 
 // front-end
+
+// debug: confirm GI auth works
+app.get("/gi/_auth", async (_req, res) => {
+  try {
+    const t = await getAccessToken();
+    res.json({ ok: true, tokenPreview: t ? (t.slice(0, 8) + "…") : null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "web", "index.html")));
 
 // listen on 0.0.0.0 for Railway
